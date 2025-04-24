@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>drone_middleware</name>
+  <version>0.0.1</version>
+  <description>Drone side middleware streaming Morton-encoded voxels over UDP.</description>
+
+
+  <!-- Dépendances build & run -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>visualization_msgs</depend>
+  <depend>asio</depend>
+
+  <!-- Export section pour ament -->
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
