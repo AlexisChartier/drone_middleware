@@ -1,18 +1,24 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>drone_middleware</name>
-  <version>0.0.1</version>
-  <description>Drone side middleware streaming Morton-encoded voxels over UDP.</description>
+  <version>0.1.0</version>
+  <description>UDP middleware for drone OctoMap streaming</description>
 
+  <!-- Obligatoire -->
+  <maintainer email="dev@example.com">Dev Name</maintainer>
+  <license>MIT</license>
 
-  <!-- Dépendances build & run -->
+  <!-- Outils / dépendances de build -->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <!-- Dépendances run-time -->
   <depend>rclcpp</depend>
-  <depend>visualization_msgs</depend>
+  <depend>octomap_msgs</depend>
   <depend>asio</depend>
+  <depend>octomap</depend>
+  <depend>zlib</depend>
 
-  <!-- Export section pour ament -->
+  <!-- Indique explicitement le type de build -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>

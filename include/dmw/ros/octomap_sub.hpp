@@ -1,22 +1,36 @@
 #pragma once
+/* ─── ROS & OctoMap ──────────────────────────────────────────────── */
 #include <rclcpp/rclcpp.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
-#include "dmw/core/voxel_buffer.hpp"
-#include "dmw/core/morton.hpp"
+#include <octomap_msgs/msg/octomap.hpp>
+#include <octomap_msgs/conversions.h>
 
-namespace dmw::ros
-{
+/* ─── STL ────────────────────────────────────────────────────────── */
+#include <memory>
+#include <vector>
+
+/* ─── Middleware ─────────────────────────────────────────────────── */
+#include "dmw/transport/itransport.hpp"
+#include "dmw/core/binary_packet_builder.hpp"
+
+namespace dmw::ros {
+
 class OctomapSub : public rclcpp::Node
 {
 public:
-    OctomapSub(core::VoxelBuffer<16384>& buf, uint16_t drone_id);
+  explicit OctomapSub(std::shared_ptr<dmw::transport::ITransport> tx);
 
 private:
-    void marker_callback(
-        const visualization_msgs::msg::MarkerArray::SharedPtr msg);
+  void callback(octomap_msgs::msg::Octomap::SharedPtr msg);
 
-    core::VoxelBuffer<16384>& buf_;
-    rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr sub_;
-    uint16_t drone_id_;
+  /* ─── state ─── */
+  std::shared_ptr<dmw::transport::ITransport>                 tx_;
+  rclcpp::Subscription<octomap_msgs::msg::Octomap>::SharedPtr sub_;
+  dmw::core::BinaryPacketBuilder                              builder_;
+
+  double       snapshot_interval_{10.0};
+  bool         compress_{true};
+  rclcpp::Time last_snapshot_;
+  std::shared_ptr<octomap::OcTree> last_tree_;
 };
+
 } // namespace dmw::ros

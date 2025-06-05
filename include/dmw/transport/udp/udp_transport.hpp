@@ -1,28 +1,29 @@
 #pragma once
-#include "dmw/transport/itransport.hpp"
 #include <asio.hpp>
+#include <string>
+#include <memory>
 
-namespace dmw::transport
+namespace dmw::transport::udp
 {
-/** Back-end “UDP datagram” – implémente ITransport. */
-class UdpTransport final : public ITransport
+using asio::ip::udp;
+
+/** Transport UDP très simple : envoi de datagrammes vers une adresse/port. */
+class UdpTransport : public std::enable_shared_from_this<UdpTransport>
 {
 public:
-    UdpTransport();
+    UdpTransport();  // constructeur par défaut
+    bool connect(const std::string& host, uint16_t port);  // configuration post-creation
 
-    /** Ouvre la socket et prépare l’endpoint (IP + port). */
-    bool connect(std::string_view host, uint16_t port) override;
-
-    /** Envoie <data,size> en un seul datagramme (best effort). */
-    bool send(PacketView p) noexcept override;
-
-    /** Ferme proprement la socket. */
-    void close() noexcept override;
+    void send(const void* data, std::size_t len)
+    {
+        sock_.send_to(asio::buffer(data, len), dst_);
+    }
 
 private:
-    asio::io_context        io_;
-    asio::ip::udp::socket   socket_;
-    asio::ip::udp::endpoint endpoint_;
+    asio::io_context io_;
+    udp::socket      sock_;
+    udp::endpoint    dst_;
 };
-} // namespace dmw::transport
+
+} // namespace dmw::transport::udp
     

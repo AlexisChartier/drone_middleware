@@ -1,75 +1,57 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.16)
 project(drone_middleware LANGUAGES CXX)
 
+# ───────────────  options globales  ──────────────────────────────
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_definitions(ASIO_STANDALONE)
 
-########################  Dépendances ROS / externes  ########################
-find_package(rclcpp REQUIRED)
-find_package(visualization_msgs REQUIRED)
-find_package(asio CONFIG REQUIRED)          # Asio header-only (Debian pkg: libasio-dev)
+# ───────────────  dépendances  ───────────────────────────────────
+find_package(ament_cmake   REQUIRED)
+find_package(rclcpp        REQUIRED)
+find_package(octomap       REQUIRED)       
+find_package(octomap_msgs  REQUIRED)
+find_package(ZLIB          REQUIRED)
 
-##############################################################################
-#                       INCLUDES & DEFINITIONS                               #
-##############################################################################
-include_directories(
-  include
+find_path(ASIO_INCLUDE_DIR asio.hpp REQUIRED)
+include_directories(include ${ASIO_INCLUDE_DIR} ${OCTOMAP_INCLUDE_DIRS})
+
+# ───────────────  sources  ───────────────────────────────────────
+set(SRC
+  src/main.cpp
+  src/core/binary_packet_builder.cpp
+  src/core/udp_header.cpp
+  src/transport/udp/udp_transport.cpp
+  src/transport/udp/plugin.cpp
+  src/transport/url.cpp
+  src/transport/factory.cpp
+  src/ros/octomap_sub.cpp
 )
 
-add_compile_definitions(ASIO_STANDALONE)    # pour Asio non-Boost
+# ───────────────  exécutable  ────────────────────────────────────
+add_executable(dmw_node ${SRC})
 
-##############################################################################
-#                              LIBS CORE                                     #
-##############################################################################
-add_library(dmw_core
-    src/core/morton.cpp
-    src/core/packet_builder.cpp
-    src/core/voxel_buffer.cpp
-)
-target_include_directories(dmw_core PUBLIC include)
-target_link_libraries(dmw_core PUBLIC)
-
-##############################################################################
-#                         TRANSPORT – UDP backend                            #
-##############################################################################
-add_library(dmw_udp
-    src/transport/udp/udp_transport.cpp
-)
-target_link_libraries(dmw_udp PUBLIC dmw_core asio::asio)
-
-##############################################################################
-#                       TRANSPORT – factory + url                            #
-##############################################################################
-add_library(dmw_transport
-    src/transport/url.cpp
-    src/transport/factory.cpp
-)
-target_link_libraries(dmw_transport PUBLIC dmw_core)
-
-##############################################################################
-#                                ROS layer                                   #
-##############################################################################
-add_library(dmw_ros
-    src/ros/octomap_sub.cpp
-)
-target_link_libraries(dmw_ros
-    PUBLIC dmw_core rclcpp visualization_msgs::visualization_msgs
-)
-
-##############################################################################
-#                               EXECUTABLE                                   #
-##############################################################################
-add_executable(dmw_node src/main.cpp)
+# *** on lie les bibliothèques "classiques" d'OctoMap ***
 target_link_libraries(dmw_node
-    PUBLIC dmw_core dmw_udp dmw_transport dmw_ros rclcpp
+  ${OCTOMAP_LIBRARIES}      # fournit   octomap  octomath
+  ZLIB::ZLIB
 )
 
-install(TARGETS dmw_node
-  RUNTIME DESTINATION lib/${PROJECT_NAME})
+ament_target_dependencies(dmw_node
+  rclcpp
+  octomap_msgs              # messages ROS 2
+)
 
-##############################################################################
-#                        COLCON / ament export                               #
-##############################################################################
-ament_export_include_directories(include)
-ament_export_libraries(dmw_core dmw_udp dmw_transport dmw_ros)
+# ───────────────  installation  ─────────────────────────────────
+install(TARGETS dmw_node
+        RUNTIME DESTINATION lib/${PROJECT_NAME})
+
+install(DIRECTORY launch
+        DESTINATION share/${PROJECT_NAME}/launch
+        OPTIONAL)
+
+# indispensable : copie du package.xml pour qu’ament référence le paquet
+install(FILES package.xml
+        DESTINATION share/${PROJECT_NAME})
+
 ament_package()
