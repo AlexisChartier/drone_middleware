@@ -24,6 +24,7 @@
     RUN apt-get update && apt-get install -y --no-install-recommends \
             build-essential cmake git libasio-dev \
             liboctomap-dev ros-humble-octomap-msgs \
+            iw iputils-ping \
         && rm -rf /var/lib/apt/lists/*
     
     # -------------------------------------------------------------------------

@@ -1,51 +1,70 @@
+/**********************************************************************
+ *  OctomapSub  –  écoute un topic OctoMap binaire et envoie
+ *                 des fragments via ITransport.
+ *********************************************************************/
 #include "dmw/ros/octomap_sub.hpp"
 
+#include <octomap_msgs/conversions.h>
 #include <zlib.h>
+
 #include <algorithm>
 #include <chrono>
 #include <string>
+#include <vector>
 
 using namespace std::chrono_literals;
 
 namespace dmw::ros
 {
-/* ------------ helper compression (zlib niveau 1) ---------------- */
+// ===================================================================
+// utilitaires
+// ===================================================================
+
+// -- zlib ----------------------------------------------------------------
 static std::vector<uint8_t> compress_vec(const std::vector<int8_t>& in)
 {
-  uLongf dst_sz = compressBound(in.size());
-  std::vector<uint8_t> out(dst_sz);
+  uLongf dst = compressBound(in.size());
+  std::vector<uint8_t> out(dst);
 
-  if (compress2(out.data(), &dst_sz,
-                reinterpret_cast<const Bytef*>(in.data()),
-                in.size(), 1) != Z_OK)
+  if (::compress2(out.data(), &dst,
+                  reinterpret_cast<const Bytef*>(in.data()),
+                  in.size(), 1) != Z_OK)
     throw std::runtime_error("zlib compress failed");
 
-  out.resize(dst_sz);
+  out.resize(dst);
   return out;
 }
 
-/* ---------------------- constructeur ----------------------------- */
-OctomapSub::OctomapSub(std::shared_ptr<dmw::transport::ITransport> tx)
-  : Node("octomap_relay_node"),                 //
-    tx_{std::move(tx)},                         //
-    builder_{1300, 0}                           // MTU 1300, channel 0
+// -- helper param() : déclare si besoin puis lit -------------------------
+template<typename T>
+T param(rclcpp::Node* n, const std::string& name, const T& def_val)
 {
-  /* paramètres avec valeurs par défaut */
-  const double snapshot_def = 10.0;
-  snapshot_interval_ =
-      declare_parameter<double>("snapshot_interval_s", snapshot_def);
-  compress_ =
-      declare_parameter<bool>("compress", true);
+  if (!n->has_parameter(name))
+    n->declare_parameter<T>(name, def_val);
+  return n->get_parameter(name).get_value<T>();
+}
 
-  std::string topic =
-      declare_parameter<std::string>("octomap_topic", "octomap_binary"); // ← RELATIF
+// ===================================================================
+// Ctor
+// ===================================================================
+OctomapSub::OctomapSub(std::shared_ptr<dmw::transport::ITransport> tx)
+: Node("octomap_relay_node",
+       rclcpp::NodeOptions{}
+         .allow_undeclared_parameters(true)
+         .automatically_declare_parameters_from_overrides(true)),
+  tx_{std::move(tx)},
+  builder_{1300, 0}
+{
+  snapshot_interval_ = param(this, "snapshot_interval_s", 10.0);
+  compress_          = param(this, "compress",            true);
 
-  /* si l’utilisateur n’a pas mis de « / » on préfixe par le namespace
-     du nœud (ex :  "/DT1/octomap_binary")                              */
+  std::string topic  = param(this, "octomap_topic",
+                             std::string("octomap_binary"));   // ← relatif
+
   if (!topic.empty() && topic.front() != '/')
-    topic = get_namespace() + std::string("/") + topic;
+    topic = std::string(get_namespace()) + "/" + topic;
 
-  /* QoS identique à octomap_server  (Reliable + TransientLocal, depth 1) */
+  // QoS identique à octomap_server (Reliable + TransientLocal, depth 1)
   rclcpp::QoS qos{rclcpp::KeepLast(1)};
   qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
   qos.durability (rclcpp::DurabilityPolicy::TransientLocal);
@@ -57,12 +76,13 @@ OctomapSub::OctomapSub(std::shared_ptr<dmw::transport::ITransport> tx)
   last_snapshot_ = now();
 }
 
-/* ----------------------------- callback -------------------------- */
+// ===================================================================
+// callback
+// ===================================================================
 void OctomapSub::callback(octomap_msgs::msg::Octomap::SharedPtr msg)
 {
   const auto now_ts = now();
 
-  /* — envoi d’un blob via le transport — */
   auto send_blob = [&](const std::vector<uint8_t>& blob, uint8_t flags)
   {
     auto sendFn = [&](auto&& bufs)
@@ -70,18 +90,16 @@ void OctomapSub::callback(octomap_msgs::msg::Octomap::SharedPtr msg)
       dmw::transport::PacketView view{bufs.data(), bufs.size()};
       tx_->send(view);
     };
-
     builder_.build_and_send(blob.data(),
                             static_cast<uint32_t>(blob.size()),
                             flags,
                             sendFn);
   };
 
-  /* (1) snapshot complet périodique -------------------------------- */
+  // ---- snapshot périodique ------------------------------------------
   if ((now_ts - last_snapshot_).seconds() >= snapshot_interval_ || !last_tree_)
   {
     std::vector<uint8_t> bytes(msg->data.begin(), msg->data.end());
-
     if (compress_)
       bytes = compress_vec(msg->data);
 
@@ -89,9 +107,10 @@ void OctomapSub::callback(octomap_msgs::msg::Octomap::SharedPtr msg)
     last_snapshot_ = now_ts;
   }
 
-  /* (2) delta-update désactivé pour l’instant ---------------------- */
+  // ---- delta-update désactivé pour l’instant ------------------------
 
   last_tree_.reset(
       dynamic_cast<octomap::OcTree*>(octomap_msgs::binaryMsgToMap(*msg)));
 }
+
 } // namespace dmw::ros
