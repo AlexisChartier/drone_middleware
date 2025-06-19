@@ -1,119 +1,75 @@
 // ────────────────────────────────────────────────────────────────
-//  Drone Middleware – main.cpp   (Octomap binaire → UDP fragments)
-// ────────────────────────────────────────────────────────────────
+//  Drone Middleware – main.cpp   (Octomap binaire ⇒ UDP fragments)
+// ----------------------------------------------------------------
+#include "dmw/ros/octomap_sub.hpp"
 #include "dmw/transport/factory.hpp"
 #include "dmw/transport/url.hpp"
 
 #include <rclcpp/rclcpp.hpp>
-#include <octomap_msgs/msg/octomap.hpp>
-#include <zlib.h>
+#include <cctype>
+#include <cstdlib>
+#include <memory>
+#include <string>
 
-#include <atomic>
-#include <chrono>
-#include <cstring>
-#include <thread>
-#include <vector>
-#include "dmw/transport/udp/plugin.cpp"  // force linkage du backend UDP
-
-namespace dmw::core
+/* helper : extrait l’entier de “DT1”  →  1 (0-255) */
+static uint8_t numeric_id(const std::string & id)
 {
-#pragma pack(push, 1)
-struct UdpHdr            // 16 octets
+  for (char c : id)
+    if (std::isdigit(c))
+      return static_cast<uint8_t>(std::atoi(&c));
+  return 0;
+}
+
+int main(int argc, char ** argv)
 {
-    uint32_t seq;        // identifiant du scan complet
-    uint32_t tot;        // taille totale du blob
-    uint32_t off;        // offset du fragment
-    uint16_t len;        // longueur du fragment
-    uint8_t  flags;      // 1 = snapshot, 2 = delta
-    uint8_t  drone_id;   // 0‑255
-};
-#pragma pack(pop)
+  /* ---------------------------------------------------------------- */
+  /* 1) Initialisation ROS 2 + nœud temporaire pour lire les paramètres */
+  /* ---------------------------------------------------------------- */
+  rclcpp::init(argc, argv);
 
-inline constexpr uint16_t DEFAULT_MTU   = 1300;   // payload ≤ 1300 o
-inline constexpr uint8_t  FLAG_SNAPSHOT = 0x01;
-inline constexpr uint8_t  FLAG_DELTA    = 0x02;   // réservé (delta‑update)
-} // namespace dmw::core
+  rclcpp::NodeOptions opts;
+  opts.allow_undeclared_parameters(true)
+      .automatically_declare_parameters_from_overrides(true);
 
-/*──────────────────────── Programme ────────────────────────*/
-int main(int argc, char** argv)
-{
-    rclcpp::init(argc, argv);
-    auto node = std::make_shared<rclcpp::Node>("dmw_udp_octomap_relay");
+  // nom vide ⇒ sera renommé depuis le launch-file
+  auto param_node = std::make_shared<rclcpp::Node>("_params", opts);
 
-    /* ---------- paramètres ROS ---------- */
-    node->declare_parameter("drone_id",        1);
-    node->declare_parameter("transport_url",   std::string("udp://127.0.0.1:48484"));
-    node->declare_parameter("mtu_payload",     static_cast<int>(dmw::core::DEFAULT_MTU));
-    node->declare_parameter("compress",        true);
+    
+    const std::string drone_id = param_node->get_parameter_or<std::string>("drone_id", "DT1");
+    const std::string url_str  = param_node->get_parameter_or<std::string>(
+                                    "transport_url", "udp://127.0.0.1:48484");
+    const int  mtu       = param_node->get_parameter_or<int>("mtu_payload", 1300);
+    const bool compress  = param_node->get_parameter_or<bool>("compress",   true);
+    std::string topic    = param_node->get_parameter_or<std::string>("octomap_topic",
+                                                                    "/octomap_binary");
 
-    const uint16_t    drone_id   = static_cast<uint16_t>(node->get_parameter("drone_id").as_int());
-    const std::string url_str    = node->get_parameter("transport_url").as_string();
-    const uint16_t    mtu        = static_cast<uint16_t>(node->get_parameter("mtu_payload").as_int());
-    const bool        compress   = node->get_parameter("compress").as_bool();
+  /* ---------------------------------------------------------------- */
+  /* 2) Transport UDP                                                 */
+  /* ---------------------------------------------------------------- */
+  auto url = dmw::transport::parse(url_str);
+  auto tx  = dmw::transport::Factory::instance().make(url);
 
-    /* ---------- transport UDP ---------- */
-    auto url = dmw::transport::parse(url_str);
-    auto tx  = dmw::transport::Factory::instance().make(url);
-    if (!tx || !tx->connect(url.host, url.port))
-    {
-        RCLCPP_FATAL(node->get_logger(), "Cannot create transport for %s", url_str.c_str());
-        return 1;
-    }
-    RCLCPP_INFO(node->get_logger(),
-                "Drone %u → %s:%u  (MTU %u, compress %s)",
-                drone_id, url.host.c_str(), url.port, mtu, compress ? "yes" : "no");
+  if (!tx || !tx->connect(url.host, url.port))
+  {
+    RCLCPP_FATAL(param_node->get_logger(),
+                 "Cannot create transport for %s", url_str.c_str());
+    return 1;
+  }
 
-    /* ---------- abonne‑ment Octomap binaire ---------- */
-    static std::atomic<uint32_t> seq_counter{0};
+  RCLCPP_INFO(param_node->get_logger(),
+              "Drone %s (id=%u) → %s:%u",
+              drone_id.c_str(), numeric_id(drone_id),
+              url.host.c_str(), url.port);
 
-    node->create_subscription<octomap_msgs::msg::Octomap>(
-        "/octomap_binary",
-        rclcpp::SensorDataQoS(),
-        [&, mtu, compress, drone_id](const octomap_msgs::msg::Octomap::SharedPtr msg)
-        {
-            const uint8_t* data = reinterpret_cast<const uint8_t*>(msg->data.data());
-            uint32_t       size = static_cast<uint32_t>(msg->data.size());
+  /* ---------------------------------------------------------------- */
+  /* 3) Nœud applicatif : OctomapSub                                  */
+  /* ---------------------------------------------------------------- */
+  auto octo_node = std::make_shared<dmw::ros::OctomapSub>(std::move(tx));
 
-            /* — compression optionnelle (zlib niveau 1) — */
-            std::vector<uint8_t> zbuf;
-            if (compress)
-            {
-                uLongf dst_len = compressBound(size);
-                zbuf.resize(dst_len);
-                if ( ::compress2(zbuf.data(), &dst_len, data, size, 1) == Z_OK )
-                {
-                    zbuf.resize(dst_len);
-                    data = zbuf.data();
-                    size = static_cast<uint32_t>(zbuf.size());
-                }
-            }
-
-            const uint32_t seq = seq_counter.fetch_add(1, std::memory_order_relaxed);
-
-            /* — fragmentation MTU‑aware — */
-            for (uint32_t off = 0; off < size; off += mtu)
-            {
-                const uint16_t len = static_cast<uint16_t>(std::min<uint32_t>(mtu, size - off));
-
-                dmw::core::UdpHdr hdr{
-                    seq,            // identifiant
-                    size,           // taille totale
-                    off,            // offset
-                    len,            // longueur fragment
-                    dmw::core::FLAG_SNAPSHOT,
-                    static_cast<uint8_t>(drone_id)
-                };
-
-                std::vector<uint8_t> packet(sizeof(hdr) + len);
-                std::memcpy(packet.data(), &hdr, sizeof(hdr));
-                std::memcpy(packet.data() + sizeof(hdr), data + off, len);
-
-                tx->send({packet.data(), packet.size()});
-            }
-        });
-
-    rclcpp::spin(node);
-    tx->close();
-    rclcpp::shutdown();
-    return 0;
+  /* ---------------------------------------------------------------- */
+  /* 4) Exécution                                                     */
+  /* ---------------------------------------------------------------- */
+  rclcpp::spin(octo_node);
+  rclcpp::shutdown();
+  return 0;
 }

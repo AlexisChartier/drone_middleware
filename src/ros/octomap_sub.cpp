@@ -3,14 +3,13 @@
 #include <zlib.h>
 #include <algorithm>
 #include <chrono>
+#include <string>
 
 using namespace std::chrono_literals;
 
 namespace dmw::ros
 {
-/* ------------------------------------------------------------------ */
-/*       Helper : compression simple (zlib niveau 1)                   */
-/* ------------------------------------------------------------------ */
+/* ------------ helper compression (zlib niveau 1) ---------------- */
 static std::vector<uint8_t> compress_vec(const std::vector<int8_t>& in)
 {
   uLongf dst_sz = compressBound(in.size());
@@ -25,41 +24,49 @@ static std::vector<uint8_t> compress_vec(const std::vector<int8_t>& in)
   return out;
 }
 
-/* ------------------------------------------------------------------ */
-/*                         Constructeur                                */
-/* ------------------------------------------------------------------ */
+/* ---------------------- constructeur ----------------------------- */
 OctomapSub::OctomapSub(std::shared_ptr<dmw::transport::ITransport> tx)
-    : Node("octomap_relay_node"),
-      tx_{std::move(tx)},
-      builder_{1300, 0}          /* MTU 1300, channel 0 */
+  : Node("octomap_relay_node"),                 //
+    tx_{std::move(tx)},                         //
+    builder_{1300, 0}                           // MTU 1300, channel 0
 {
-  /* paramètres ROS */
-  declare_parameter("snapshot_interval_s", 10.0);
-  declare_parameter("compress", true);
-  snapshot_interval_ = get_parameter("snapshot_interval_s").as_double();
-  compress_          = get_parameter("compress").as_bool();
+  /* paramètres avec valeurs par défaut */
+  const double snapshot_def = 10.0;
+  snapshot_interval_ =
+      declare_parameter<double>("snapshot_interval_s", snapshot_def);
+  compress_ =
+      declare_parameter<bool>("compress", true);
+
+  std::string topic =
+      declare_parameter<std::string>("octomap_topic", "octomap_binary"); // ← RELATIF
+
+  /* si l’utilisateur n’a pas mis de « / » on préfixe par le namespace
+     du nœud (ex :  "/DT1/octomap_binary")                              */
+  if (!topic.empty() && topic.front() != '/')
+    topic = get_namespace() + std::string("/") + topic;
+
+  /* QoS identique à octomap_server  (Reliable + TransientLocal, depth 1) */
+  rclcpp::QoS qos{rclcpp::KeepLast(1)};
+  qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
+  qos.durability (rclcpp::DurabilityPolicy::TransientLocal);
 
   sub_ = create_subscription<octomap_msgs::msg::Octomap>(
-      "/octomap_binary", rclcpp::SensorDataQoS(),
-      std::bind(&OctomapSub::callback, this, std::placeholders::_1));
+           topic, qos,
+           std::bind(&OctomapSub::callback, this, std::placeholders::_1));
 
   last_snapshot_ = now();
 }
 
-/* ------------------------------------------------------------------ */
-/*                           Callback                                  */
-/* ------------------------------------------------------------------ */
+/* ----------------------------- callback -------------------------- */
 void OctomapSub::callback(octomap_msgs::msg::Octomap::SharedPtr msg)
 {
   const auto now_ts = now();
 
-  /* helper : expédie un bloc via le transport */
+  /* — envoi d’un blob via le transport — */
   auto send_blob = [&](const std::vector<uint8_t>& blob, uint8_t flags)
   {
-    /*  lambda intermédiaire : reçoit l’array<asio::const_buffer,2>           */
     auto sendFn = [&](auto&& bufs)
     {
-      /* PacketView = {ptr,size} : on le construit à partir du tableau        */
       dmw::transport::PacketView view{bufs.data(), bufs.size()};
       tx_->send(view);
     };
@@ -70,16 +77,10 @@ void OctomapSub::callback(octomap_msgs::msg::Octomap::SharedPtr msg)
                             sendFn);
   };
 
-  /* ---------------------------------------------------------------- */
-  /*      (1) snapshot complet périodique                              */
-  /* ---------------------------------------------------------------- */
+  /* (1) snapshot complet périodique -------------------------------- */
   if ((now_ts - last_snapshot_).seconds() >= snapshot_interval_ || !last_tree_)
   {
-    std::vector<uint8_t> bytes;
-    bytes.reserve(msg->data.size());
-    std::transform(msg->data.begin(), msg->data.end(),
-                   std::back_inserter(bytes),
-                   [](int8_t v){ return static_cast<uint8_t>(v); });
+    std::vector<uint8_t> bytes(msg->data.begin(), msg->data.end());
 
     if (compress_)
       bytes = compress_vec(msg->data);
@@ -88,14 +89,9 @@ void OctomapSub::callback(octomap_msgs::msg::Octomap::SharedPtr msg)
     last_snapshot_ = now_ts;
   }
 
-  /* ---------------------------------------------------------------- */
-  /*      (2) delta ⇒ désactivé (API computeUpdate obsolète)          */
-  /*          -> laisser pour portage ultérieur                       */
-  /* ---------------------------------------------------------------- */
+  /* (2) delta-update désactivé pour l’instant ---------------------- */
 
-  /* mémorisation du dernier snapshot */
   last_tree_.reset(
       dynamic_cast<octomap::OcTree*>(octomap_msgs::binaryMsgToMap(*msg)));
 }
-
 } // namespace dmw::ros

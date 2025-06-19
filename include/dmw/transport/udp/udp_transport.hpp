@@ -2,22 +2,20 @@
 #include <asio.hpp>
 #include <string>
 #include <memory>
+#include "dmw/transport/itransport.hpp"
 
 namespace dmw::transport::udp
 {
 using asio::ip::udp;
 
 /** Transport UDP très simple : envoi de datagrammes vers une adresse/port. */
-class UdpTransport : public std::enable_shared_from_this<UdpTransport>
+class UdpTransport : public dmw::transport::ITransport
 {
 public:
-    UdpTransport();  // constructeur par défaut
-    bool connect(const std::string& host, uint16_t port);  // configuration post-creation
-
-    void send(const void* data, std::size_t len)
-    {
-        sock_.send_to(asio::buffer(data, len), dst_);
-    }
+    UdpTransport();
+    bool connect(std::string_view host, uint16_t port) override;  // ✅ Signature corrigée
+    bool send(PacketView p) noexcept override;
+    void close() noexcept override;
 
 private:
     asio::io_context io_;
@@ -26,4 +24,3 @@ private:
 };
 
 } // namespace dmw::transport::udp
-    

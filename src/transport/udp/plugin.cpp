@@ -7,7 +7,7 @@ struct RegisterUdpTransport
     RegisterUdpTransport()
     {
         dmw::transport::Factory::instance().register_backend("udp", []() -> dmw::transport::Ptr {
-            return std::make_shared<dmw::transport::udp::UdpTransport>();
+            return std::make_unique<dmw::transport::udp::UdpTransport>();
         });
     }
 };
