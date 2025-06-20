@@ -25,7 +25,7 @@ def generate_launch_description() -> LaunchDescription:
     transport_arg  = DeclareLaunchArgument(
         'transport_url',
         default_value=LaunchConfiguration(
-            'TRANSPORT_URL', default='udp://udp_sink:48484'))
+            'TRANSPORT_URL', default='udp://map-server:9000'))
     mtu_arg        = DeclareLaunchArgument('mtu_payload',    default_value='1300')
     compress_arg   = DeclareLaunchArgument('compress',       default_value='true')
     topic_arg      = DeclareLaunchArgument('octomap_topic',  default_value='/octomap_binary')
